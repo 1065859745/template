@@ -16,91 +16,93 @@ import (
 )
 
 type Call struct {
-	Name, Messages, To string
-	Transits, ToArr    []string
-	useTrans           bool
+	Name, Messages string
 }
-type Result struct {
+type Display struct {
 	Name     []string
 	Messages string
 	Status   bool
 }
+type Trans struct {
+	TransCall, TransHost []string
+	Messages             string
+}
 
 func main() {
 	flag.Parse()
-	scan := bufio.NewScanner(os.Stdin)
+	scan, calls, ch := bufio.NewScanner(os.Stdin), Call{Name: `[Unkown]`}, make(chan []string)
 	reg, _ := regexp.Compile(`[^\s*$]`)
 
 	fmt.Print(`Your name [Default "Unkown"]: `)
 	scan.Scan()
 
-	calls := Call{Name: `[` + scan.Text() + `]`}
-	if reg.MatchString(calls.Name) {
-		calls.Name = `[Unkown]`
+	if !reg.MatchString(scan.Text()) {
+		calls.Name = fmt.Sprintf("[%s]", scan.Text())
 	}
 
-	var transHost string
+	var trans Trans
 	fmt.Print("Transits server host : ")
 	scan.Scan()
-	calls.Transits = delSame(strings.Split(scan.Text(), ` `))
-	if !reg.MatchString(calls.Transits[0]) {
-		fristT := strings.Split(calls.Transits[0], `:`)
-		transHost = calls.Transits[0]
-		calls.Transits = calls.Transits[1:]
-		if fristT[0] == `127.0.0.1` || fristT[0] == `localhost` {
-			if len(fristT) == 2 {
-				go serve(calls.Transits[0])
-			} else {
-				go serve(``)
-			}
+	if !reg.MatchString(scan.Text()) {
+		trans.TransHost = strings.Fields(scan.Text())
+		delNearby(&trans.TransHost)
+		fmt.Print(`Who do you want to call by transfer: `)
+		scan.Scan()
+		if !reg.MatchString(scan.Text()) {
+			trans.TransCall = strings.Fields(scan.Text())
+			delSame(&trans.TransCall)
 		}
-	} else {
-		calls.Transits = []string{}
 	}
 
-	fmt.Print(`Who do you want to call: `)
+	var to []string
+	fmt.Print(`Who do you want to call by face: `)
 	scan.Scan()
 	if !reg.MatchString(scan.Text()) {
-		calls.ToArr = strings.Split(scan.Text(), ` `)
-		calls.To = strings.Join(calls.ToArr, `,`)
+		to = strings.Fields(scan.Text())
+		delSame(&to)
 		log.Print(`| Test calling...`)
 
-		if calls.useTrans {
-			go calls.Test(transHost)
-		} else {
-			for _, v := range calls.ToArr {
-				go calls.Test(v)
-			}
+		for _, v := range to {
+			go calls.Test(v)
 		}
 	}
 
 	for {
 		scan.Scan()
-		text := scan.Text()
-		if text == `` {
-			continue
-		} else if text == `$Call` {
+		t := scan.Text()
+		switch !reg.MatchString(t) {
+		case strings.HasPrefix(t, `$Call`):
+			ch <- strings.Fields(t)
+		case strings.HasPrefix(t, `$TransCall`):
+			ch <- strings.Fields(t)
+		case strings.HasPrefix(t, `$Name`):
+			calls.Name = strings.Fields(t)[1]
+		case strings.HasPrefix(t, `$TransHost`):
+			ch <- strings.Fields(t)
+		default:
+			calls.Messages = t
+			if len(trans.TransCall) != 0 {
+				trans.Messages = t
 
-		} else if text == `$Trans` {
-
-		} else if text == `$Name` {
-			continue
-		} else {
-			calls.Messages = scan.Text()
-		}
-		calls.Println()
-		if calls.useTrans {
-			calls.Sender(transHost)
-		} else {
-			for _, v := range calls.ToArr {
-				calls.Sender(v)
+			}
+			for _, v := range to {
+				d, e := json.Marshal(calls)
+				if e != nil {
+					log.Printf("| %s", e.Error())
+					continue
+				}
+				_, e = http.Get(fmt.Sprintf("http://%s/conversation?calls=%s", v, string(d)))
+				if e != nil {
+					log.Printf("| %s", e.Error())
+					continue
+				}
 			}
 		}
 	}
 }
 
 func serve(host string) {
-	var rs Result
+	var rs Display
 	rs.Name = []string{`localhost`, ``}
 	http.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
 		// query := r.URL.Query()
@@ -114,20 +116,6 @@ func serve(host string) {
 		rs.Println()
 	}
 	return
-}
-
-func (cs Call) Sender(host string) {
-	d, e := json.Marshal(cs)
-	if e != nil {
-		log.Printf("| %s", e.Error())
-		return
-	}
-
-	_, e = http.Get(fmt.Sprintf("http://%s/conversation?calls=%s", host, string(d)))
-	if e != nil {
-		log.Printf("| %s", e.Error())
-	}
-	cs.Println()
 }
 
 func (cs Call) Test(host string) {
@@ -199,18 +187,40 @@ func (rs Result) Println() {
 func (cs Call) Println() {
 	log.Printf("| %s : %s", cs.Name, cs.Messages)
 }
-func delSame(arr []string) []string {
+func delNearby(arr *[]string) {
+	ar := *arr
 a:
 	for {
-		for i, v := range arr {
-			if i != len(arr)-1 {
-				if v == arr[i+1] {
-					arr = append(arr[:i], arr[i+1:]...)
+		for i, v := range ar {
+			if i != len(ar)-1 {
+				if v == ar[i+1] {
+					ar = append(ar[:i], ar[i+1:]...)
 					continue a
 				}
 			}
 		}
 		break
 	}
-	return arr
+	arr = &ar
+}
+
+func delSame(arr *[]string) {
+	ar := *arr
+a:
+	for {
+		for i, n := range ar {
+			if i != len(ar)-1 {
+				for _, m := range ar[i+1:] {
+					if n != m {
+						continue
+					} else {
+						ar = append(ar[i+1:])
+						continue a
+					}
+				}
+			}
+			break a
+		}
+	}
+	arr = &ar
 }
