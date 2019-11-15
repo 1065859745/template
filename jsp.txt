@@ -1,0 +1,3 @@
+JSP技术以Java语言作为脚本语言，为用户的HTTP请求提供服务，并能与服务器上的其它Java程序共同处理复杂的业务需求。
+.JSP文件默认的脚本语言为JAVA语言，所以要想在.JSP文件中使用其他脚本语言需要声明脚本类型，如<script type="text/javascript">...</script>
+.html中默认的脚本语言是javascript,在.html文件中使用javascript可以不声明脚本类型。
