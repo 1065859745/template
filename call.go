@@ -5,43 +5,23 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"math/rand"
 	"net"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
-	"time"
 )
 
 type Call struct {
-	port     *string
 	messages string
 	all, to  []string
 }
 
-var call = Call{port: flag.String("p", "", "Local serve port, default random.")}
+var call Call
 
 func main() {
 	flag.Parse()
 	scan := bufio.NewScanner(os.Stdin)
 	reg, _ := regexp.Compile(`^\s*$`)
-
-	if *call.port == `` {
-		for {
-			rand.Seed(time.Now().Unix())
-			p := strconv.Itoa(rand.Intn(59000) + 1000)
-			call.port = &p
-			l, e := net.Listen("tcp", ":"+*call.port)
-			if e != nil {
-				continue
-			} else {
-				l.Close()
-			}
-			fmt.Printf("Serve at 127.0.0.1:%s\n", *call.port)
-			break
-		}
-	}
 
 	go serve()
 
@@ -51,7 +31,7 @@ func main() {
 		if !reg.MatchString(t) {
 			if strings.HasPrefix(t, `$Call`) {
 				call.to = strings.Fields(t)[1:]
-				delSame(&call.to, `127.0.0.1:`+*call.port)
+				delSame(&call.to, `127.0.0.1`)
 				continue
 			}
 			if strings.HasPrefix(t, `$Clear all`) {
@@ -82,48 +62,43 @@ func main() {
 }
 
 func serve() {
-	l, _ := net.Listen("tcp4", ":"+*call.port)
-	var remoteIp, remoteAddr, m string
-	for {
-		conn, e := l.Accept()
-		if e != nil {
-			log.Printf("| %s", e.Error())
-			continue
-		}
+	ipAddr, e := net.ResolveIPAddr(`ip4`, `127.0.0.1`)
+	if e != nil {
+		log.Fatal(e)
+	}
+	conn, _ := net.ListenIP("ip4:ip", ipAddr)
 
-		go func(c net.Conn) {
+	var remoteAddr string
+	go func(conn *net.IPConn) {
+		for {
 			var b [512]byte
-			defer c.Close()
-			n, e := c.Read(b[0:])
+			n, addr, e := conn.ReadFromIP(b[:])
 			if e != nil {
 				log.Printf("| %s", e.Error())
-				return
+				continue
 			}
-
-			m = string(b[:n])
-			remoteIp = strings.Split(c.RemoteAddr().String(), `:`)[0]
-			remoteAddr = fmt.Sprintf("%s:%s", remoteIp, strings.Split(m, ` `)[0])
-			if remoteAddr != fmt.Sprintf("127.0.0.1:%s", *call.port) {
-				log.Printf("|From| %s:%s", remoteIp, m)
+			remoteAddr = addr.String()
+			if remoteAddr != `127.0.0.1` {
+				log.Printf("|From| %s:%s", remoteAddr, b[:n])
 				update(&call.all, remoteAddr)
 			}
-		}(conn)
-	}
+		}
+	}(conn)
 }
 
 func (c Call) Send(a []string) {
 	for _, v := range a {
-		conn, e := net.Dial("tcp4", v)
+		conn, e := net.Dial("tcp4:1", v)
 		if e != nil {
 			log.Printf("| %s", e.Error())
 			continue
 		}
 
 		log.Printf("|To| %s", c.messages)
-		conn.Write([]byte(fmt.Sprintf("%s : %s", *c.port, c.messages)))
+		conn.Write([]byte(fmt.Sprintf(" %s", c.messages)))
 		conn.Close()
 
-		if v != `127.0.0.1`+*c.port {
+		if v != `127.0.0.1` {
 			update(&c.all, v)
 		}
 	}
