@@ -15,9 +15,10 @@ import (
 )
 
 type Call struct {
-	port     *string
-	messages string
-	all, to  []string
+	port       *string
+	udpAddress net.UDPAddr
+	messages   string
+	all, to    []net.UDPAddr
 }
 
 var call = Call{port: flag.String("p", "", "Local serve port, default random.")}
@@ -31,18 +32,19 @@ func main() {
 		for {
 			rand.Seed(time.Now().Unix())
 			p := strconv.Itoa(rand.Intn(59000) + 1000)
-			call.port = &p
-			l, e := net.Listen("tcp", ":"+*call.port)
+			*call.port = p
+			udpAddr, _ := net.ResolveUDPAddr(`udp`, ":"+*call.port)
+			l, e := net.ListenUDP("udp", udpAddr)
 			if e != nil {
 				continue
 			} else {
 				l.Close()
 			}
 			fmt.Printf("Serve at 127.0.0.1:%s\n", *call.port)
+			call.udpAddress = *udpAddr
 			break
 		}
 	}
-
 	go serve()
 
 	for {
@@ -50,12 +52,22 @@ func main() {
 		t := scan.Text()
 		if !reg.MatchString(t) {
 			if strings.HasPrefix(t, `$Call`) {
-				call.to = strings.Fields(t)[1:]
-				delSame(&call.to, `127.0.0.1:`+*call.port)
+				to := strings.Fields(t)[1:]
+				delSame(&to, `127.0.0.1:`+*call.port)
+				c := []net.UDPAddr{}
+				for _, v := range to {
+					addr, e := net.ResolveUDPAddr(`udp`, v)
+					if e != nil {
+						log.Printf("| %s ", e.Error())
+						continue
+					}
+					c = append(c, *addr)
+				}
+				call.to = c
 				continue
 			}
 			if strings.HasPrefix(t, `$Clear all`) {
-				call.all = []string{}
+				call.all = []net.UDPAddr{}
 				continue
 			}
 			if strings.HasPrefix(t, `$List`) {
@@ -67,7 +79,7 @@ func main() {
 				continue
 			}
 			if strings.HasPrefix(t, `$All`) {
-				call.to = []string{}
+				call.to = []net.UDPAddr{}
 				continue
 			}
 
@@ -82,38 +94,31 @@ func main() {
 }
 
 func serve() {
-	l, _ := net.Listen("tcp4", ":"+*call.port)
-	var remoteIp, remoteAddr, m string
+	conn, _ := net.ListenUDP("udp", &call.udpAddress)
 	for {
-		conn, e := l.Accept()
+		var b [512]byte
+		n, addr, e := conn.ReadFromUDP(b[:])
 		if e != nil {
 			log.Printf("| %s", e.Error())
-			continue
+			return
 		}
 
-		go func(c net.Conn) {
-			var b [512]byte
-			defer c.Close()
-			n, e := c.Read(b[0:])
-			if e != nil {
-				log.Printf("| %s", e.Error())
-				return
-			}
+		m := string(b[:n])
+		remoteAddr := fmt.Sprintf("%s:%s", addr.IP, strings.Split(m, ` `)[0])
 
-			m = string(b[:n])
-			remoteIp = strings.Split(c.RemoteAddr().String(), `:`)[0]
-			remoteAddr = fmt.Sprintf("%s:%s", remoteIp, strings.Split(m, ` `)[0])
-			if remoteAddr != fmt.Sprintf("127.0.0.1:%s", *call.port) {
-				log.Printf("|From| %s:%s", remoteIp, m)
-				update(&call.all, remoteAddr)
+		if remoteAddr != fmt.Sprintf("127.0.0.1:%s", *call.port) {
+			log.Printf("|From| %s:%s", addr.IP, m)
+			if e = addUDP(&call.all, remoteAddr); e != nil {
+				log.Printf("| %s", e.Error())
 			}
-		}(conn)
+		}
 	}
 }
 
-func (c Call) Send(a []string) {
+func (c Call) Send(a []net.UDPAddr) {
 	for _, v := range a {
-		conn, e := net.Dial("tcp4", v)
+		udpAddr := v.String()
+		conn, e := net.Dial("udp", udpAddr)
 		if e != nil {
 			log.Printf("| %s", e.Error())
 			continue
@@ -123,28 +128,14 @@ func (c Call) Send(a []string) {
 		conn.Write([]byte(fmt.Sprintf("%s : %s", *c.port, c.messages)))
 		conn.Close()
 
-		if v != `127.0.0.1`+*c.port {
-			update(&c.all, v)
+		if udpAddr != `127.0.0.1`+*c.port {
+			if e = addUDP(&call.all, udpAddr); e != nil {
+				log.Printf("| %s", e.Error())
+				return
+			}
 		}
 	}
 }
-
-// func delNearby(arr *[]string) {
-// 	ar := *arr
-// a:
-// 	for {
-// 		for i, v := range ar {
-// 			if i != len(ar)-1 {
-// 				if v == ar[i+1] {
-// 					ar = append(ar[:i], ar[i+1:]...)
-// 					continue a
-// 				}
-// 			}
-// 		}
-// 		break
-// 	}
-// 	arr = &ar
-// }
 
 func delSame(ar *[]string, s string) {
 	arr := *ar
@@ -164,6 +155,7 @@ a:
 		}
 		break
 	}
+
 	for i, v := range arr {
 		if v != s {
 			continue
@@ -174,18 +166,25 @@ a:
 	*ar = arr
 }
 
-func update(arr *[]string, s string) {
-	a := *arr
-	for i, v := range a {
-		if i != len(a)-1 {
-			if v != s {
-				continue
-			}
-			break
-		}
-		if v != s {
-			a = append(a, s)
-		}
+func addUDP(u *[]net.UDPAddr, s string) error {
+	udpAddr, e := net.ResolveUDPAddr(`udp`, s)
+	if e != nil {
+		return e
 	}
-	*arr = a
+	if len(*u) != 0 {
+		for i, v := range *u {
+			if i != len(*u)-1 {
+				if v.String() != s {
+					continue
+				}
+				break
+			}
+			if v.String() != s {
+				*u = append(*u, *udpAddr)
+			}
+		}
+	} else {
+		*u = append(*u, *udpAddr)
+	}
+	return e
 }
