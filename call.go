@@ -22,21 +22,28 @@ func main() {
 	reg, _ := regexp.Compile(`^\s*$`)
 	switch *t {
 	case -1:
-		serve()
+		// serve()
+		fmt.Println(`-1`)
 	case 1:
+		fmt.Println(`1`)
 		// client()
 	default:
 		go serve()
+
+		var t string
+		var tArr []string
 		for {
 			scan.Scan()
-			t := scan.Text()
+			t = scan.Text()
+			tArr = strings.Fields(t)[1:]
 			if !reg.MatchString(t) {
 				if strings.HasPrefix(t, `$Name`) {
-					name = `[` + strings.Join(strings.Fields(t)[1:], ` `) + `]`
+					name = `[` + strings.Join(tArr, ` `) + `]`
 					continue
 				}
 				if strings.HasPrefix(t, `$Call`) {
-					for _, v := range strings.Fields(t)[1:] {
+					delSame(&tArr)
+					for _, v := range tArr {
 						go client(v)
 					}
 					continue
@@ -53,18 +60,14 @@ func main() {
 					fmt.Println(`-------------------------`)
 					continue
 				}
-				if strings.HasPrefix(t, `$All`) {
-					chStr <- t
-					continue
-				}
 				if strings.HasPrefix(t, `$Answer`) {
-					for _, v := range strings.Fields(t)[1:] {
+					for _, v := range tArr {
 						chStr <- `$Answer ` + v
 					}
 					continue
 				}
 				if strings.HasPrefix(t, `$Down`) {
-					for _, v := range strings.Fields(t)[1:] {
+					for _, v := range tArr {
 						chStr <- `$Down ` + v
 					}
 					continue
@@ -139,10 +142,11 @@ func tcpRead(conn net.Conn) {
 }
 
 func tcpWrite(conn net.Conn, chStr chan string) {
+	var m string
 	remoteAddr := conn.RemoteAddr().String()
 
 	for {
-		m := <-chStr
+		m = <-chStr
 		if strings.HasPrefix(m, `$Answer`) {
 			if strings.HasPrefix(m, `$Answer `+remoteAddr) {
 				m = <-chStr
@@ -155,7 +159,9 @@ func tcpWrite(conn net.Conn, chStr chan string) {
 					log.Printf("| %s", m)
 				}
 			}
-		} else if strings.HasPrefix(m, `$Down`) {
+			continue
+		}
+		if strings.HasPrefix(m, `$Down`) {
 			if strings.HasPrefix(m, `$Down `+remoteAddr) || strings.HasPrefix(m, `$Down all`) {
 				if e := conn.Close(); e != nil {
 					log.Printf("| %s", e.Error())
@@ -164,33 +170,16 @@ func tcpWrite(conn net.Conn, chStr chan string) {
 				del(&all, remoteAddr)
 				break
 			}
-		} else {
-			_, e := conn.Write([]byte(m))
-			if e != nil {
-				log.Printf("| %s", e.Error())
-				continue
-			}
-			log.Printf("| %s", m)
+			continue
 		}
+		_, e := conn.Write([]byte(m))
+		if e != nil {
+			log.Printf("| %s", e.Error())
+			continue
+		}
+		log.Printf("| %s", m)
 	}
 }
-
-// func delNearby(arr *[]string) {
-// 	ar := *arr
-// a:
-// 	for {
-// 		for i, v := range ar {
-// 			if i != len(ar)-1 {
-// 				if v == ar[i+1] {
-// 					ar = append(ar[:i], ar[i+1:]...)
-// 					continue a
-// 				}
-// 			}
-// 		}
-// 		break
-// 	}
-// 	arr = &ar
-// }
 
 func delSame(ar *[]string) {
 	arr := *ar
