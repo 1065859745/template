@@ -15,11 +15,13 @@ import (
 )
 
 var port, chStr, t, all, name = flag.String("p", "", `Local serve port, default random.`), make(chan string, 10), flag.Int("t", 0, `Start type,-1 only serve, 0 double, 1 only client.`), []string{}, `[Unkown]`
+var chAnswer, chDown chan string
 
 func main() {
 	flag.Parse()
-	scan := bufio.NewScanner(os.Stdin)
+	var scan = bufio.NewScanner(os.Stdin)
 	reg, _ := regexp.Compile(`^\s*$`)
+
 	switch *t {
 	case -1:
 		// serve()
@@ -35,10 +37,11 @@ func main() {
 		for {
 			scan.Scan()
 			t = scan.Text()
-			tArr = strings.Fields(t)[1:]
 			if !reg.MatchString(t) {
+				tArr = strings.Fields(t)[1:]
 				if strings.HasPrefix(t, `$Name`) {
-					name = `[` + strings.Join(tArr, ` `) + `]`
+					nameArr := strings.Split(t, ` `)[1:]
+					name = `[` + strings.Join(nameArr, ` `) + `]`
 					continue
 				}
 				if strings.HasPrefix(t, `$Call`) {
@@ -46,10 +49,6 @@ func main() {
 					for _, v := range tArr {
 						go client(v)
 					}
-					continue
-				}
-				if strings.HasPrefix(t, `$Clear`) {
-					all = []string{}
 					continue
 				}
 				if strings.HasPrefix(t, `$List`) {
@@ -63,38 +62,60 @@ func main() {
 				if strings.HasPrefix(t, `$Answer`) {
 					for _, v := range tArr {
 						chStr <- `$Answer ` + v
+						<-chStr
+					}
+				answer:
+					for {
+						scan.Scan()
+						t = scan.Text()
+						if !reg.MatchString(t) {
+							t = fmt.Sprintf("%s : %s", name, t)
+							chAnswer <- t
+							<-chAnswer
+							break answer
+						}
 					}
 					continue
 				}
 				if strings.HasPrefix(t, `$Down`) {
 					for _, v := range tArr {
 						chStr <- `$Down ` + v
+						<-chStr
 					}
+					continue
+				}
+				if strings.HasPrefix(t, `$Port`) {
+					fmt.Println(`------------`)
+					fmt.Printf(":%s\n", *port)
+					fmt.Println(`------------`)
 					continue
 				}
 				t = fmt.Sprintf("%s : %s", name, t)
 				chStr <- t
+				<-chStr
+				log.Printf("| %s", t)
 			}
 		}
 	}
 }
 
 func serve() {
+	var l net.Listener
+	var e error
 	if *port == `` {
 		for {
 			rand.Seed(time.Now().Unix())
 			*port = strconv.Itoa(rand.Intn(59000) + 1000)
-			l, e := net.Listen("tcp", ":"+*port)
+			l, e = net.Listen("tcp", ":"+*port)
 			if e != nil {
 				continue
-			} else {
-				l.Close()
 			}
 			fmt.Printf("Serve at 127.0.0.1:%s\n", *port)
 			break
 		}
+	} else if l, e = net.Listen("tcp4", ":"+*port); e != nil {
+		log.Fatal(e)
 	}
-	l, _ := net.Listen("tcp4", ":"+*port)
 
 	for {
 		conn, e := l.Accept()
@@ -102,12 +123,14 @@ func serve() {
 			log.Printf("| %s", e.Error())
 			continue
 		}
-		update(&all, conn.RemoteAddr().String())
+		remoteAddr := conn.RemoteAddr().String()
+		update(&all, remoteAddr)
+		log.Printf(`Connected to %s successful.`, remoteAddr)
 		// read
 		go tcpRead(conn)
 
 		// write
-		tcpWrite(conn, chStr)
+		tcpWrite(conn)
 	}
 }
 
@@ -118,66 +141,66 @@ func client(addr string) {
 		return
 	}
 	update(&all, addr)
+	log.Printf(`Connected to %s successful.`, addr)
 
 	// read
 	go tcpRead(conn)
 
 	// write
-	tcpWrite(conn, chStr)
+	tcpWrite(conn)
 }
 
 func tcpRead(conn net.Conn) {
 	var b [512]byte
 	remoteAddr := conn.RemoteAddr().String()
-
+	defer del(&all, remoteAddr)
 	for {
 		n, e := conn.Read(b[:])
 		if e != nil {
-			log.Printf("| %s", e.Error())
+			chDown <- `$Down ` + remoteAddr
 			log.Printf("|Miss| %s", remoteAddr)
+			<-chDown
 			break
 		}
 		log.Printf("|From| %s %s", remoteAddr, string(b[:n]))
 	}
 }
 
-func tcpWrite(conn net.Conn, chStr chan string) {
+func tcpWrite(conn net.Conn) {
 	var m string
 	remoteAddr := conn.RemoteAddr().String()
 
 	for {
-		m = <-chStr
-		if strings.HasPrefix(m, `$Answer`) {
-			if strings.HasPrefix(m, `$Answer `+remoteAddr) {
-				m = <-chStr
-				if !strings.HasPrefix(m, `$`) {
-					_, e := conn.Write([]byte(m))
-					if e != nil {
-						log.Printf("| %s", e.Error())
-						continue
-					}
-					log.Printf("| %s", m)
-				}
-			}
-			continue
+		select {
+		case m = <-chStr:
+			chStr <- m
+		case m = <-chDown:
+			chDown <- m
 		}
-		if strings.HasPrefix(m, `$Down`) {
-			if strings.HasPrefix(m, `$Down `+remoteAddr) || strings.HasPrefix(m, `$Down all`) {
-				if e := conn.Close(); e != nil {
-					log.Printf("| %s", e.Error())
+
+		if strings.HasPrefix(m, `$Answer`) {
+			if strings.Fields(m)[1] == remoteAddr {
+				m = <-chAnswer
+				if !strings.HasPrefix(m, `$`) {
+					log.Printf("|Answer %s| %s", remoteAddr, m)
+				} else {
 					continue
 				}
-				del(&all, remoteAddr)
+				chAnswer <- m
+			}
+		} else if strings.HasPrefix(m, `$Down`) {
+			if strings.HasPrefix(m, `$Down `+remoteAddr) || strings.HasPrefix(m, `$Down all`) {
+				conn.Close()
 				break
 			}
 			continue
 		}
+
 		_, e := conn.Write([]byte(m))
 		if e != nil {
 			log.Printf("| %s", e.Error())
 			continue
 		}
-		log.Printf("| %s", m)
 	}
 }
 
@@ -230,4 +253,14 @@ func update(arr *[]string, s string) {
 		return
 	}
 	*arr = append(*arr, s)
+}
+func includes(arr []string, s string) bool {
+	b := false
+	for _, v := range arr {
+		if v == s {
+			b = true
+			break
+		}
+	}
+	return b
 }
