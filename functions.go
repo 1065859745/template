@@ -76,3 +76,15 @@ a:
 	}
 	*arr = ar
 }
+
+//  判断数组中是否存在某个元素，有一个bool返回值，存在返回true，否则返回false。
+func includes(arr []string, s string) bool {
+	b := false
+	for _, v := range arr {
+		if v == s {
+			b = true
+			break
+		}
+	}
+	return b
+}
