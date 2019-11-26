@@ -14,8 +14,7 @@ import (
 	"time"
 )
 
-var port, chStr, t, all, name = flag.String("p", "", `Local serve port, default random.`), make(chan string, 10), flag.Int("t", 0, `Start type,-1 only serve, 0 double, 1 only client.`), []string{}, `[Unkown]`
-var chAnswer, chDown chan string
+var port, chStr, chAnswer, chDown, t, all, name = flag.String("p", "", `Local serve port, default random.`), make(chan string, 10), make(chan string, 2), make(chan string, 5), flag.Int("t", 0, `Start type,-1 only serve, 0 double, 1 only client.`), []string{}, `[Unkown]`
 
 func main() {
 	flag.Parse()
@@ -125,7 +124,7 @@ func serve() {
 		}
 		remoteAddr := conn.RemoteAddr().String()
 		update(&all, remoteAddr)
-		log.Printf(`Connected to %s successful.`, remoteAddr)
+		log.Printf(`| %s connected.`, remoteAddr)
 		// read
 		go tcpRead(conn)
 
@@ -183,12 +182,17 @@ func tcpWrite(conn net.Conn) {
 				m = <-chAnswer
 				if !strings.HasPrefix(m, `$`) {
 					log.Printf("|Answer %s| %s", remoteAddr, m)
-				} else {
-					continue
+					_, e := conn.Write([]byte(m))
+					if e != nil {
+						log.Panicf("| %s", e.Error())
+						continue
+					}
+					chAnswer <- m
 				}
-				chAnswer <- m
 			}
-		} else if strings.HasPrefix(m, `$Down`) {
+			continue
+		}
+		if strings.HasPrefix(m, `$Down`) {
 			if strings.HasPrefix(m, `$Down `+remoteAddr) || strings.HasPrefix(m, `$Down all`) {
 				conn.Close()
 				break
@@ -198,23 +202,23 @@ func tcpWrite(conn net.Conn) {
 
 		_, e := conn.Write([]byte(m))
 		if e != nil {
-			log.Printf("| %s", e.Error())
+			log.Panicf("| %s", e.Error())
 			continue
 		}
 	}
 }
 
-func delSame(ar *[]string) {
-	arr := *ar
+func delSame(arr *[]string) {
+	ar := *arr
 a:
 	for {
-		for i, n := range arr {
-			if i != len(arr)-1 {
-				for j, m := range arr[i+1:] {
+		for i, n := range ar {
+			if i != len(ar)-1 {
+				for j, m := range ar[i+1:] {
 					if n != m {
 						continue
 					} else {
-						arr = append(arr[:j+i+1], arr[j+i+2:]...)
+						ar = append(ar[:j+i+1], ar[j+i+2:]...)
 						continue a
 					}
 				}
@@ -222,7 +226,7 @@ a:
 		}
 		break
 	}
-	*ar = arr
+	*arr = ar
 }
 
 func del(ar *[]string, s string) {
