@@ -14,8 +14,7 @@ import (
 	"time"
 )
 
-var port, all = flag.String("p", "", "Local serve port, default random."), []net.UDPAddr{}
-var messageCh, downCh, answerCh chan string
+var port, all, messageCh, downCh, answerCh = flag.String("p", "", "Local serve port, default random."), []net.UDPAddr{}, make(chan string, 10), make(chan string, 5), make(chan string)
 
 func main() {
 	flag.Parse()
@@ -28,26 +27,63 @@ func main() {
 		scan.Scan()
 		t := scan.Text()
 		if !reg.MatchString(t) {
+			tArr := strings.Fields(t)[1:]
 			if strings.HasPrefix(t, `$Call`) {
-
+				for _, v := range tArr {
+					if udpAddr, e := net.ResolveUDPAddr(`udp`, v); e != nil {
+						log.Printf("| %s", e.Error())
+					} else {
+						if !includeUdp(&all, *udpAddr) {
+							all = append(all, *udpAddr)
+							go client(udpAddr)
+						}
+					}
+				}
 				continue
 			}
 			if strings.HasPrefix(t, `$Name`) {
-
+				name = strings.Join(strings.Split(t, ` `)[1:], ` `)
 				continue
 			}
 			if strings.HasPrefix(t, `$List`) {
-
+				fmt.Println(`-------------------`)
+				for i, v := range all {
+					fmt.Println(i+1, v.String())
+				}
+				fmt.Println(`-------------------`)
 				continue
 			}
 			if strings.HasPrefix(t, `$Answer`) {
-
+				for _, v := range tArr {
+					messageCh <- `$Answer ` + v
+					<-messageCh
+				}
+			answer:
+				for {
+					scan.Scan()
+					t = scan.Text()
+					if !reg.MatchString(t) {
+						t = fmt.Sprintf("%s : %s", name, t)
+						answerCh <- t
+						<-answerCh
+						break answer
+					}
+				}
+				continue
+			}
+			if strings.HasPrefix(t, `$Down`) {
+				for _, v := range tArr {
+					delUDPAddr(&all, v)
+					downCh <- v
+					<-downCh
+				}
 				continue
 			}
 
 			messages = fmt.Sprintf("%s : %s", name, t)
 			messageCh <- messages
 			<-messageCh
+			log.Printf("| %s", messages)
 		}
 	}
 }
@@ -57,6 +93,7 @@ func serve() {
 	var udpAddr *net.UDPAddr
 	var e error
 
+	/* if *port equal nil,it becomes random*/
 	if *port == `` {
 		for {
 			rand.Seed(time.Now().Unix())
@@ -77,66 +114,69 @@ func serve() {
 		conn, _ = net.ListenUDP("udp", udpAddr)
 	}
 
-	addUDP(&all, udpAddr.String())
+	/* read */
+	var b [512]byte
+	for {
+		n, addr, _ := conn.ReadFromUDP(b[:])
+		log.Printf("|From| %s %s", addr.String(), string(b[:n]))
 
-	go read(conn)
-
-	write(conn)
+		if !includeUdp(&all, *addr) {
+			all = append(all, *addr)
+			go write(conn, addr, true)
+		}
+	}
 }
 
 func client(udpAddr *net.UDPAddr) {
 	conn, _ := net.DialUDP("udp", nil, udpAddr)
+	addr := udpAddr.String()
+	/* write */
+	go write(conn, udpAddr, false)
 
-	addUDP(&all, udpAddr.String())
-
-	go read(conn)
-
-	write(conn)
-}
-
-func read(conn *net.UDPConn) {
-	remoteAddr := conn.RemoteAddr().String()
+	/* read */
+	var b [512]byte
 	for {
-		var b [512]byte
-		n, addr, e := conn.ReadFromUDP(b[:])
+		n, _, e := conn.ReadFromUDP(b[:])
 		if e != nil {
-			downCh <- `$Down ` + remoteAddr
-			conn.Close()
-			delUDPAddr(&all, remoteAddr)
-			<-downCh
-			return
+			break
 		}
-
-		m := string(b[:n])
-		log.Printf("|From| %s %s", addr.String(), m)
-		log.Printf("| %s", e.Error())
+		log.Printf("|From| %s %s", addr, string(b[:n]))
 	}
 }
 
-func write(conn *net.UDPConn) {
+func write(conn *net.UDPConn, udpAddr *net.UDPAddr, b bool) {
 	var m string
-	remoteAddr := conn.RemoteAddr().String()
+	addr := udpAddr.String()
+	defer delUDPAddr(&all, addr)
 
+a:
 	for {
 		select {
 		case m = <-messageCh:
 			messageCh <- m
 		case m = <-downCh:
 			downCh <- m
+			if m == addr || m == `all` {
+				conn.Close()
+				break a
+			}
+			continue
+		}
+		if strings.HasPrefix(m, `$Answer`) {
+			if strings.HasPrefix(m, "$Answer "+addr) {
+				m = <-answerCh
+				conn.Write([]byte(m))
+				log.Printf("|Answer %s| %s", addr, m)
+				answerCh <- m
+			}
+			continue
 		}
 
-		if strings.HasPrefix(m, "$Answer "+remoteAddr) {
-			m = <-answerCh
-			answerCh <- m
-		} else if strings.HasPrefix(m, "$Down "+remoteAddr) || strings.HasPrefix(m, "$Down all") {
-			conn.Close()
-			break
-		}
-
-		_, e := conn.Write([]byte(m))
-		if e != nil {
-			log.Printf("| %s", e.Error())
-			break
+		/* udp 的写入数据有两种不同的方式，作为客户机用write(),作为服务端用 writeToUDP() */
+		if b {
+			conn.WriteToUDP([]byte(m), udpAddr)
+		} else {
+			conn.Write([]byte(m))
 		}
 	}
 }
@@ -174,22 +214,14 @@ func delUDPAddr(arr *[]net.UDPAddr, s string) {
 	*arr = ar
 }
 
-func addUDP(u *[]net.UDPAddr, s string) {
-	udpAddr, _ := net.ResolveUDPAddr(`udp`, s)
-
-	if len(*u) != 0 {
-		for i, v := range *u {
-			if i != len(*u)-1 {
-				if v.String() != s {
-					continue
-				}
-				break
-			}
-			if v.String() != s {
-				*u = append(*u, *udpAddr)
-			}
+func includeUdp(addrArr *[]net.UDPAddr, addr net.UDPAddr) bool {
+	b := false
+	s := addr.String()
+	for _, v := range *addrArr {
+		if v.String() == s {
+			b = true
+			break
 		}
-	} else {
-		*u = append(*u, *udpAddr)
 	}
+	return b
 }
