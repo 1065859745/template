@@ -26,7 +26,7 @@
 | 监听端口 |------------| 循环读取输入 |------------| 主动发起连接 |
 -----------             -------------              -------------
 ```
-每个连接是一个新的goroutine。其中，读取输入后通过一个管道向多个goroutine传递同一个数据的逻辑可以查看我的CSDN中这篇[文章](https://blog.csdn.net/weixin_44305204/article/details/103233951)
+每个连接是一个新的goroutine。其中，读取输入后通过一个管道向多个goroutine传递同一个数据的逻辑可以查看CSDN中这篇[文章](https://blog.csdn.net/weixin_44305204/article/details/103233951)
 ### 技巧
 #### $Call \[addr\]
 作为客户机发起一个连接
