@@ -5,7 +5,7 @@ func main() {
 	// array:=[]string{`a`,`b`,`c`,`d`,`a`,`d`,`e`,`f`,`g`,`c`,`e`}
 }
 
-/* 删除数组中某一个元素 */
+/* 删除切片中某一个元素 */
 func del(arr *[]string, s string) {
 	ar := *arr
 	for i, v := range ar {
@@ -18,7 +18,7 @@ func del(arr *[]string, s string) {
 	*arr = ar
 }
 
-// 删除数组中相同的元素
+// 删除切片中相同的元素
 func delSame(arr *[]string) {
 	ar := *arr
 a:
@@ -40,7 +40,7 @@ a:
 	*arr = ar
 }
 
-// 插入新元素，若数组中已存在，则忽略
+// 插入新元素，若切片中已存在，则忽略
 func update(arr *[]string, s string) {
 	if len(*arr) != 0 {
 		for i, v := range *arr {
@@ -59,7 +59,7 @@ func update(arr *[]string, s string) {
 	*arr = append(*arr, s)
 }
 
-// 删除相邻相同的元素
+// 删除切片中相邻相同的元素
 func delNearby(arr *[]string) {
 	ar := *arr
 a:
@@ -77,7 +77,7 @@ a:
 	*arr = ar
 }
 
-//  判断数组中是否存在某个元素，有一个bool返回值，存在返回true，否则返回false。
+//  判断切片中是否存在某个元素，有一个bool返回值，存在返回true，否则返回false。
 func includes(arr []string, s string) bool {
 	b := false
 	for _, v := range arr {
